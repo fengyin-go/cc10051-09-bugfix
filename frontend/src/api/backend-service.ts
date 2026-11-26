@@ -1,6 +1,16 @@
 import { request } from './client'
 import { moduleMeta } from '@/data/modules'
-import type { ActionResult, EntryRow, OverviewResult, PageResult } from '@/data/types'
+import type {
+  ActionResult,
+  ClaimableResult,
+  ClaimResult,
+  EntryRow,
+  OverviewResult,
+  PageResult,
+  PublishManifest,
+  PublishReceiptResult,
+  PublishResult,
+} from '@/data/types'
 
 export { moduleMeta }
 
@@ -33,6 +43,53 @@ export async function runAction(
   const response = await request(`/api/${key}/${id}/actions`, {
     method: 'POST',
     body: JSON.stringify({ action }),
+  })
+  return await response.json()
+}
+
+/** 发布提交：确认版本并登记分发清单；断线后用原发布编号重提可续做。 */
+export async function publishBatch(key: string, publishId: number): Promise<PublishResult> {
+  const response = await request(`/api/${key}/publish?publish_id=${publishId}`, {
+    method: 'POST',
+  })
+  return await response.json()
+}
+
+/** 发布行回查：确认状态、同版分发清单与可领取状态。 */
+export async function fetchPublishManifest(
+  key: string,
+  publishId: number,
+): Promise<PublishManifest> {
+  const response = await request(`/api/${key}/manifest?publish_id=${publishId}`)
+  if (!response.ok) throw new Error('发布清单读取失败')
+  return await response.json()
+}
+
+/** 发布完成回执：按原发布编号回查提交结果。 */
+export async function fetchPublishReceipt(
+  key: string,
+  publishId: number,
+): Promise<PublishReceiptResult> {
+  const response = await request(`/api/${key}/receipt?publish_id=${publishId}`)
+  if (!response.ok) throw new Error('发布回执读取失败')
+  return await response.json()
+}
+
+/** 分发领取端：按发布编号取完整分发清单，含不可领取原因。 */
+export async function fetchClaimable(
+  key: string,
+  publishRef: string,
+): Promise<ClaimableResult> {
+  const query = new URLSearchParams({ publish_id: publishRef }).toString()
+  const response = await request(`/api/${key}/claimable?${query}`)
+  if (!response.ok) throw new Error('可领取清单读取失败')
+  return await response.json()
+}
+
+/** 分发领取：认领一条分发批次，未完成前不会记为已发出。 */
+export async function claimBatch(key: string, taskId: number): Promise<ClaimResult> {
+  const response = await request(`/api/${key}/claim?task_id=${taskId}`, {
+    method: 'POST',
   })
   return await response.json()
 }

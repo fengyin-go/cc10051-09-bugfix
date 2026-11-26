@@ -78,6 +78,14 @@ npm run dev
   `frontend/src/domain/<模块>.ts`，用于承载真实业务差异并维持36题位容量。
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
+- 金记录发布分两段：`POST /api/golden_publish/publish?publish_id=N` 先确认版本
+  （只消费同实体、已真正合并并带金记录标识的记录），再为每个生效订阅方登记分发清单；
+  清单齐全后才置为 `已发布`。重复提交沿用已确认的版本标识，断线后可用同一发布编号续做。
+- 发布行回查 `GET /api/golden_publish/manifest?publish_id=N` 与完成回执
+  `GET /api/golden_publish/receipt?publish_id=N` 都按发布编号精确取数，不跨批次拼凑。
+- 分发领取 `GET /api/dist_task/claimable?publish_id=N` 只返回已确认清单里的批次，
+  不可领取会给出原因；`POST /api/dist_task/claim?task_id=N` 认领一次即锁定，
+  未完成前不会记为已发出。
 
 领域：数据工程
 子方向：数仓与数据湖

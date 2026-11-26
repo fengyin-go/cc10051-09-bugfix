@@ -60,6 +60,24 @@
             >
               {{ action }}
             </button>
+            <button
+              v-if="isPublishModule"
+              class="link"
+              type="button"
+              :data-testid="`publish-check-${row.id}`"
+              @click="openPublishConfirm(row)"
+            >
+              查发布清单
+            </button>
+            <button
+              v-if="isDistModule"
+              class="link"
+              type="button"
+              :data-testid="`claim-open-${row.id}`"
+              @click="openClaim(row)"
+            >
+              领取
+            </button>
           </td>
         </tr>
         <tr v-if="!rows.length">
@@ -69,6 +87,20 @@
         </tr>
       </tbody>
     </table>
+
+    <PublishConfirmPanel
+      v-if="isPublishModule && showPublishConfirm"
+      ref="publishPanel"
+      :publish-row="publishRow"
+      data-testid="publish-confirm-panel"
+    />
+
+    <DistClaimPanel
+      v-if="isDistModule && showClaim"
+      ref="claimPanel"
+      data-testid="dist-claim-panel"
+      @claimed="reload"
+    />
 
     <div v-if="showCreate" class="modal-backdrop" data-testid="create-modal">
       <form class="modal" @submit.prevent="submitCreate">
@@ -94,15 +126,18 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 
 import {
   createEntry,
   downloadEntries,
   listEntries,
   moduleMeta,
+  publishBatch,
   runAction as applyAction,
 } from '@/api/backend-service'
+import DistClaimPanel from '@/components/DistClaimPanel.vue'
+import PublishConfirmPanel from '@/components/PublishConfirmPanel.vue'
 import type { EntryRow } from '@/data/types'
 
 const props = defineProps<{ moduleKey: string }>()
@@ -115,6 +150,13 @@ const filterFields = meta.fields.slice(0, 3)
 const showCreate = ref(false)
 const creating = ref(false)
 const createValues = ref<Record<string, string>>({})
+const isPublishModule = computed(() => meta.key === 'golden_publish')
+const isDistModule = computed(() => meta.key === 'dist_task')
+const showPublishConfirm = ref(false)
+const showClaim = ref(false)
+const publishRow = ref<EntryRow | null>(null)
+const publishPanel = ref<InstanceType<typeof PublishConfirmPanel> | null>(null)
+const claimPanel = ref<InstanceType<typeof DistClaimPanel> | null>(null)
 const stats = computed(() => [
   { label: meta.metrics[0], value: total.value },
   { label: meta.metrics[1], value: rows.value.filter((row) => row.status === meta.statuses[1]).length },
@@ -168,12 +210,33 @@ async function submitCreate() {
 async function runAction(action: string, row: EntryRow) {
   errorMessage.value = ''
   try {
+    if (isPublishModule.value && action === '发布批次') {
+      // 发布要走“确认版本 + 登记清单”的完整链路，页面按发布编号回查结果。
+      const result = await publishBatch(meta.key, Number(row.id))
+      openPublishConfirm(row, result.entry ?? null)
+      await reload()
+      // 清单未就绪也打开确认面板，让操作员看到原因并从原编号续提。
+      if (!result.ok) errorMessage.value = result.message
+      return
+    }
     const result = await applyAction(meta.key, Number(row.id), action)
     if (!result.ok) throw new Error(result.message)
     await reload()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '操作失败'
   }
+}
+
+function openPublishConfirm(row: EntryRow, merged?: EntryRow | null) {
+  publishRow.value = merged ? { ...row, ...merged } : row
+  showPublishConfirm.value = true
+  void nextTick(() => publishPanel.value?.setPublishRow(publishRow.value))
+}
+
+function openClaim(row: EntryRow) {
+  showClaim.value = true
+  const publishRef = String(row.发布编号 ?? row.publish_id ?? '').trim()
+  void nextTick(() => claimPanel.value?.setPublishRef(publishRef))
 }
 
 async function reload() {

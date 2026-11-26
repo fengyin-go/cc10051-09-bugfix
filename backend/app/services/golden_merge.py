@@ -25,18 +25,45 @@ class GoldenMergeService(BaseModuleService):
     # ---- 业务扩展：金记录合并与发布衔接 ----
 
     def execute_with_survivor(self, entry_id: int) -> dict[str, Any]:
-        """按生还规则执行合并，产出金记录标识。"""
+        """按生还规则执行合并，产出金记录标识；重复执行沿用已有金记录。"""
+        with store.lock:
+            entry = store.find(self.MODULE, entry_id)
+            if entry is None:
+                return {"ok": False, "message": "合并任务不存在"}
+            if entry.get("status") == "已合并" and str(entry.get("合并结果") or "").strip():
+                return {
+                    "ok": True,
+                    "golden_id": str(entry.get("合并结果")),
+                    "survivor_rule": str(entry.get("生还规则", "最新优先")),
+                    "already_merged": True,
+                }
+            if entry.get("status") != "待合并":
+                return {"ok": False, "message": "合并任务不在待合并状态"}
+            rule = str(entry.get("生还规则", "最新优先"))
+            golden_id = f"GR-{entry.get('实体编码')}-{entry_id:04d}"
+            if rule == "置信度最高":
+                golden_id += "-C"
+            entry["合并结果"] = golden_id
+            entry["status"] = "已合并"
+            entry["pending"] = False
+            entry["abnormal"] = False
+            return {"ok": True, "golden_id": golden_id, "survivor_rule": rule}
+
+    def run_action(self, entry_id: int, action: str) -> tuple[dict[str, Any] | None, str]:
         entry = store.find(self.MODULE, entry_id)
-        if entry is None or entry.get("status") != "待合并":
-            return {"ok": False, "message": "合并任务不在待合并状态"}
-        rule = str(entry.get("生还规则", "最新优先"))
-        golden_id = f"GR-{entry.get('实体编码')}-{entry_id:04d}"
-        if rule == "置信度最高":
-            golden_id += "-C"
-        entry["合并结果"] = golden_id
-        entry["status"] = "已合并"
-        entry["pending"] = False
-        return {"ok": True, "golden_id": golden_id, "survivor_rule": rule}
+        if entry is None:
+            return None, f"{self.ENTITY} {entry_id} 不存在或已归档"
+        if action == "执行合并":
+            result = self.execute_with_survivor(entry_id)
+            if not result.get("ok"):
+                return None, str(result.get("message") or "合并失败")
+            message = (
+                f"合并任务已合并，金记录 {result.get('golden_id')}"
+                if not result.get("already_merged")
+                else f"合并任务此前已合并，沿用金记录 {result.get('golden_id')}"
+            )
+            return entry, message
+        return super().run_action(entry_id, action)
 
     def resolve_conflict(self, entry_id: int, conclusion: str) -> str:
         """按复核结论解决合并冲突。"""
@@ -46,6 +73,7 @@ class GoldenMergeService(BaseModuleService):
         if conclusion == "通过":
             entry["status"] = "已合并"
             entry["合并结果"] = f"GR-{entry.get('实体编码')}-{entry_id:04d}-R"
+            entry["pending"] = False
         else:
             entry["status"] = "待合并"
             entry["pending"] = True

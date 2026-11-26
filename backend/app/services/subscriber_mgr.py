@@ -62,28 +62,49 @@ class SubscriberMgrService(BaseModuleService):
         return {"ok": True, "recalled_tasks": recalled}
 
     def consume_publish_versions(self, entry_id: int) -> list[str]:
-        """读取订阅实体的已发布版本列表。"""
+        """读取订阅实体下对外公布（版本与清单都已确认）的发布版本列表。"""
         entry = store.find(self.MODULE, entry_id)
         if entry is None:
             return []
         entity = str(entry.get("订阅过滤", "")).partition("=")[2] or entry.get("订阅实体", "")
-        return [p.get("版本标识", "") for p in store.rows("golden_publish")
-                if p.get("status") == "已发布" and entity in str(p.get("实体编码", ""))]
+        return [str(p.get("版本标识", "")) for p in store.rows("golden_publish")
+                if p.get("status") == "已发布"
+                and p.get("清单状态") == "已确认"
+                and entity in str(p.get("实体编码", ""))]
 
     def produce_dist_batch(self, entry_id: int, version: str) -> int:
-        """为订阅方生成分发批次，写入 dist_task。"""
+        """为订阅方生成分发批次，写入 dist_task（只接受已确认发布版本）。"""
         entry = store.find(self.MODULE, entry_id)
         if entry is None:
             return 0
+        publish = next(
+            (p for p in store.rows("golden_publish")
+             if str(p.get("版本标识") or "") == str(version)
+             and p.get("status") == "已发布"
+             and p.get("清单状态") == "已确认"),
+            None,
+        )
+        if publish is None:
+            return 0
         tasks = store.rows("dist_task")
         task_id = max((int(r.get("id", 0)) for r in tasks), default=0) + 1
+        scope = (str(entry.get("订阅实体") or "").strip()
+                 or str(entry.get("订阅过滤") or "").strip())
         tasks.append({
             "id": task_id,
             "分发批次": f"dist-{entry.get('订阅方标识')}-{task_id}",
             "订阅方": entry.get("订阅方标识", ""),
             "记录范围": f"版本 {version}",
+            "记录标识": publish.get("记录标识", ""),
+            "记录数": publish.get("金记录数", "0"),
+            "发布编号": int(publish.get("id", 0)),
+            "发布批次": publish.get("发布批次", ""),
+            "版本标识": str(version),
+            "订阅范围": scope,
             "分发状态": "排队中",
             "回执状态": "未回收",
+            "领取状态": "未认领",
+            "清单状态": "已确认" if scope else "待补全",
             "status": "排队中",
             "pending": True,
             "abnormal": False,

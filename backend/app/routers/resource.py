@@ -21,6 +21,14 @@ def require_service(module: str):
     return service
 
 
+def require_capability(module: str, method: str):
+    """取领域服务并确认它支持该扩展动作；不支持的模块按未知能力处理。"""
+    service = require_service(module)
+    if not callable(getattr(service, method, None)):
+        raise HTTPException(status_code=404, detail=f"模块 {module} 不支持该操作")
+    return service
+
+
 @router.get("/{module}", response_model=PageResult[dict])
 def list_entries(
     module: str,
@@ -71,6 +79,56 @@ def export_entries(
         iter([output.getvalue()]), media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{module}.csv"'},
     )
+
+
+@router.get("/{module}/manifest")
+def get_manifest(
+    module: str,
+    entry_id: int = Query(alias="publish_id", ge=1),
+) -> dict[str, Any]:
+    """发布行回查：发布确认、同版分发清单与可领取状态（固定路径，先于动态 entry 匹配）。"""
+    service = require_capability(module, "get_manifest")
+    result = service.get_manifest(entry_id)
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("message"))
+    return result
+
+
+@router.get("/{module}/receipt")
+def get_publish_receipt(
+    module: str,
+    entry_id: int = Query(alias="publish_id", ge=1),
+) -> dict[str, Any]:
+    """发布完成回执：断线后按原发布编号回查提交结果。"""
+    service = require_capability(module, "get_receipt")
+    result = service.get_receipt(entry_id)
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("message"))
+    return result
+
+
+@router.get("/{module}/claimable")
+def list_claimable(
+    module: str,
+    publish_id: str | None = Query(default=None),
+) -> dict[str, Any]:
+    """分发领取端：按发布编号取完整分发清单，返回可领取与不可领取及原因。"""
+    service = require_capability(module, "list_claimable")
+    return service.list_claimable(publish_id)
+
+
+@router.post("/{module}/publish")
+def publish_batch(module: str, entry_id: int = Query(alias="publish_id", ge=1)) -> dict[str, Any]:
+    """发布提交：确认版本并登记分发清单，重复请求沿用已确认版本。"""
+    service = require_capability(module, "publish_batch")
+    return service.publish_batch(entry_id)
+
+
+@router.post("/{module}/claim")
+def claim_batch(module: str, entry_id: int = Query(alias="task_id", ge=1)) -> dict[str, Any]:
+    """分发领取：从完整分发清单认领一条批次，不把未完成的申请记为已发出。"""
+    service = require_capability(module, "claim_batch")
+    return service.claim_batch(entry_id)
 
 
 @router.get("/{module}/{entry_id}", response_model=dict)
